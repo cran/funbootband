@@ -1,0 +1,283 @@
+---
+title: "funbootband: Simultaneous Prediction and Confidence Bands for Time Series Data"
+author: "Daniel Koska"
+date: "`r Sys.Date()`"
+output: rmarkdown::html_vignette
+vignette: >
+  %\VignetteIndexEntry{funbootband: Simultaneous Prediction and Confidence Bands for Time Series Data}
+  %\VignetteEngine{knitr::rmarkdown}
+  %\VignetteEncoding{UTF-8}
+---
+
+```{r setup, include=FALSE}
+knitr::opts_chunk$set(
+  collapse = TRUE, comment = "#>",
+  fig.width = 6, fig.height = 4,
+  message = FALSE, warning = FALSE
+)
+
+# Keep the vignette fast on CRAN by using tiny B
+is_cran <- !identical(tolower(Sys.getenv("NOT_CRAN")), "true")
+B_demo  <- if (is_cran) 25L else 1000L # bootstrap reps
+k.coef_demo <- 50L
+
+set.seed(1)
+```
+
+## Overview
+
+`funbootband` computes **simultaneous** prediction and confidence bands for
+dense time series data on a common grid.
+It supports both i.i.d. and clustered (hierarchical) designs and uses a fast
+'Rcpp' backend.
+
+Curves are **preprocessed via finite Fourier series**
+(`k.coef` harmonics) and **bootstrapped** to generate empirical distributions, from
+which band limits are obtained as quantiles.
+
+- **Prediction bands**: cover *future individual curves* with probability
+  \(1-\alpha\).
+- **Confidence bands**: cover the *mean function* with probability \(1-\alpha\).
+
+The main user function is:
+
+```r
+band(data, type = c("prediction","confidence"),
+     alpha = 0.05, iid = TRUE, id = NULL,
+     B = 1000L, k.coef = 50L)
+```
+
+This document gives a quick tour of `funbootband` including examples with simulated data for both i.i.d. and hierarchical scenarios. The functional bootstrap method implemented in the package is an implementation of the algorithm described in Lenhoff et al. (1999) and further developed for hierarchical design in Koska et al. (2023). The vignette contains additional advice for choosing function arguments in `band()`.
+
+The vignette was written in R Markdown, using 'knitr'.
+
+### Quick start (i.i.d.)
+
+When curves are independent and identically distributed, the function argument `iid` in `band()` should be set to `TRUE`. 
+
+For this example, consider a set of simulated smooth curves from a Gaussian process on a common grid (it is generally assumed that all curves are of equal length and reasonably smooth).
+
+```{r iid-sim}
+library(funbootband)
+
+set.seed(1)
+T <- 200
+n <- 10
+x <- seq(0, 1, length.out = T)
+
+# Simulate smooth Gaussian-process-like curves of equal length
+mu  <- 10 * sin(2 * pi * x)
+ell <- 0.12; sig <- 3
+Kmat <- outer(x, x, function(s, t) sig^2 * exp(-(s - t)^2 / (2 * ell^2)))
+ev <- eigen(Kmat + 1e-8 * diag(T), symmetric = TRUE)
+Z  <- matrix(rnorm(T * n), T, n)
+Y  <- mu + ev$vectors %*% (sqrt(pmax(ev$values, 0)) * Z)
+Y  <- Y + matrix(rnorm(T * n, sd = 0.2), T, n) # observation noise
+```
+
+Simultaneous prediction and confidence bands are then computed by setting the `type` argument to
+either `prediction` or `confidence`:
+
+```{r iid-sim-plot}
+# Fit prediction and confidence bands
+fit_pred <- band(Y, type = "prediction", alpha = 0.11, iid = TRUE, B = B_demo, k.coef = k.coef_demo)
+fit_conf <- band(Y, type = "confidence", alpha = 0.11, iid = TRUE, B = B_demo, k.coef = k.coef_demo)
+```
+
+When plotting the bands alongside the original curves, we see that the shaded region is calibrated to contain *entire curves* with probability \(1-\alpha\) (simultaneous coverage).
+
+```{r iid-plot, fig.cap="Calculated prediction (blue) and confidence (gray) bands."}
+x_idx <- seq_len(fit_pred$meta$T)
+ylim  <- range(c(Y, fit_pred$lower, fit_pred$upper), finite = TRUE)
+
+plot(x_idx, fit_pred$mean, type = "n", ylim = ylim,
+     xlab = "Index (Time)", ylab = "Amplitude",
+     main = "Simultaneous bands (i.i.d.)")
+
+matlines(x_idx, Y, col = "gray70", lty = 1, lwd = 1)
+polygon(c(x_idx, rev(x_idx)), c(fit_pred$lower, rev(fit_pred$upper)),
+        col = grDevices::adjustcolor("steelblue", alpha.f = 0.25), border = NA)
+polygon(c(x_idx, rev(x_idx)), c(fit_conf$lower, rev(fit_conf$upper)),
+        col = grDevices::adjustcolor("gray40", alpha.f = 0.3), border = NA)
+lines(x_idx, fit_pred$mean, col = "black", lwd = 1)
+```
+
+
+
+## Clustered (hierarchical) curves
+
+When the i.i.d. assumption is violated, `iid` needs to be set to `FALSE`. `band()` will then
+automatically detect the cluster structure from the column names. Optionally, an
+integer/factor vector of length `ncol(data)` giving a cluster id for each curve
+can be used.
+
+The clustered case is illustrated using a design, where each group (cluster)
+follows its own mean pattern with smooth within-cluster variation.
+
+```{r clustered, eval=TRUE}
+library(funbootband)
+
+set.seed(2)
+T <- 200
+m <- c(5, 5)
+x <- seq(0, 1, length.out = T)
+
+# Cluster-specific means
+mu <- list(
+  function(z) 8 * sin(2 * pi * z),
+  function(z) 8 * cos(2 * pi * z)
+)
+
+# Generate curves with smooth within-cluster variation
+Bm <- cbind(sin(2 * pi * x), cos(2 * pi * x))
+gen_curve <- function(k) {
+  sc <- rnorm(ncol(Bm), sd = c(2.0, 1.5))
+  mu[[k]](x) + as.vector(Bm %*% sc)
+}
+
+Ylist <- lapply(seq_along(m), function(k) {
+  sapply(seq_len(m[k]), function(i) gen_curve(k) + rnorm(T, sd = 0.6))
+})
+Y <- do.call(cbind, Ylist)
+colnames(Y) <- unlist(mapply(
+  function(k, mk) paste0("C", k, "_", seq_len(mk)),
+  seq_along(m), m
+))
+
+
+# Fit prediction and confidence bands
+fit_pred <- band(Y, type = "prediction", alpha = 0.11, iid = FALSE, B = B_demo, k.coef = k.coef_demo)
+fit_conf <- band(Y, type = "confidence", alpha = 0.11, iid = FALSE, B = B_demo, k.coef = k.coef_demo)
+```
+
+**Note:** When `iid = FALSE`, the bootstrap uses a **two-stage** scheme:
+sample clusters (with replacement), then choose curves within cluster
+(without replacement until exhausted, then with replacement), which respects
+within-cluster dependence.
+
+```{r clustered-plot}
+x_idx <- seq_len(fit_pred$meta$T)
+ylim   <- range(c(Y, fit_pred$lower, fit_pred$upper), finite = TRUE)
+
+plot(x_idx, fit_pred$mean, type = "n", ylim = ylim,
+     xlab = "Index (Time)", ylab = "Amplitude",
+     main = "Simultaneous bands (clustered)")
+
+matlines(x_idx, Y, col = "gray70", lty = 1, lwd = 1)
+polygon(c(x_idx, rev(x_idx)), c(fit_pred$lower, rev(fit_pred$upper)),
+        col = grDevices::adjustcolor("steelblue", alpha.f = 0.25), border = NA)
+polygon(c(x_idx, rev(x_idx)), c(fit_conf$lower, rev(fit_conf$upper)),
+        col = grDevices::adjustcolor("gray40", alpha.f = 0.3), border = NA)
+lines(x_idx, fit_pred$mean, col = "black", lwd = 1)
+```
+
+## Choosing `k.coef` (Fourier harmonics)
+
+`k.coef` controls the number of sine/cosine harmonics (plus intercept) used to
+represent each curve before bootstrapping.
+
+- The code automatically **clamps** `k.coef` to the maximum meaningful value
+  on a length-`T` periodic grid. If a larger value is supplied, it is reduced accordingly.
+- In practice, choose the smallest `k.coef` that **adequately reconstructs** your curves.
+
+**Heuristic for selecting `k.coef`**
+
+The appropriate value of `k.coef` depends on both the **grid length** `T` and the **smoothness** of the curves:
+
+- Longer curves (larger `T`) can support higher `k.coef` values.
+- Smooth, slowly varying curves typically require only a small number of harmonics.
+- Highly oscillatory or noisy curves may need more harmonics to capture relevant detail.
+
+As a rule of thumb, increase `k.coef` only as far as necessary. Very high values mainly fit high-frequency noise, increase runtime, and may lead to numerical instability near the Nyquist limit.
+
+One simple way to inspect the effect of `k.coef` is to evaluate the **reconstruction error** (e.g., mean squared error, MSE) for different choices of `k.coef`:
+
+```{r kcoef-mse-insample, eval = !is_cran}
+# MSE vs k.coef for the i.i.d. example (uses Y from above)
+
+fourier_basis <- function(T, K) {
+  t <- seq_len(T)
+  if (K == 0L) return(cbind(1))
+  cbind(
+    1,
+    sapply(1:K, function(k) cos(2*pi*k*t/T)),
+    sapply(1:K, function(k) sin(2*pi*k*t/T))
+  )
+}
+
+reconstruct <- function(B, Y) {
+  coef <- qr.coef(qr(B), Y) # solve for all curves at once
+  B %*% coef
+}
+
+mse <- function(A, B) mean((A - B)^2)
+
+Ks <- c(10L, 20L, 30L, 40L, 50L, 60L, 70L, 80L, 90L, 99L)
+T  <- nrow(Y)
+
+tab <- do.call(rbind, lapply(Ks, function(K){
+  B <- fourier_basis(T, K)
+  Yhat <- reconstruct(B, Y)
+  data.frame(k.coef = K,
+             mse = mse(Y, Yhat),
+             pve = 100 * (1 - sum((Y - Yhat)^2) / sum((Y - mean(Y))^2)))
+}))
+row.names(tab) <- NULL
+print(tab)
+
+# Plot
+op <- par(mar = c(4,4,2,1))
+plot(tab$k.coef, tab$mse, type = "b", xlab = "k.coef", ylab = "MSE",
+     main = "Fourier reconstruction error vs. k.coef")
+```
+
+**Recommendation**
+
+If your curves are smooth and runtime is not a concern, moderately large `k.coef` values (e.g., 20–50 for dense grids) are often a good choice. For noisy data or when computation time matters, examine how the reconstruction error (or resulting band limits) changes with k.coef and select the smallest value beyond which improvements become negligible. Recomputing the bands for a few candidate values can also help confirm that results have converged.
+
+## Tuning `B` (bootstrap replicates)
+
+The argument B controls the number of bootstrap replications.
+
+- Increasing `B` generally yields tighter and more stable bands, as quantile estimates become more precise.
+- Beyond a certain threshold, however, band limits typically stabilize and no longer change meaningfully.
+- For exploratory analyses, smaller values of `B` can be used to reduce runtime. For final inference, rerun with a sufficiently large B to ensure convergence of the band limits.
+
+## API reference
+
+```r
+band(data, type = c("prediction","confidence"),
+     alpha = 0.05,
+     iid   = TRUE,
+     id    = NULL,
+     B     = 1000L,
+     k.coef = 50L)
+```
+
+- **data**: numeric matrix `T × n` (rows: time points; cols: curves). A numeric
+  `data.frame` is accepted.
+- **type**: `"prediction"` (future curve coverage) or `"confidence"` (mean).
+- **alpha**: e.g., `0.05` gives 95% bands.
+- **iid** / **id**: set `iid = FALSE` and supply `id` (length `n`) for clusters,
+  or allow inference from column-name prefixes.
+- **B**: bootstrap reps.
+- **k.coef**: Fourier harmonics (default `50`; clamped to a grid-specific max).
+
+**Return value.** A list with numeric vectors `lower`, `mean`, `upper` (length `T`)
+and `meta` (settings, `n`, `T`, etc.).
+
+## References
+
+Lenhoff, M. W., Santner, T. J., Otis, J. C., Peterson, M. G., Williams, B. J., & Backus, S. I. (1999).
+Bootstrap prediction and confidence bands: a superior statistical method for analysis of gait data.
+*Gait & Posture*, 9(1), 10–17. <doi:10.1016/S0966-6362(98)00043-5>
+
+Koska, D., Oriwol, D., & Maiwald, C. (2023).
+Comparison of statistical models for characterizing continuous differences between two biomechanical measurement systems.
+*Journal of Biomechanics*, 149, 111506. <doi:10.1016/j.jbiomech.2023.111506>
+
+## Session info
+
+```{r session-info}
+sessionInfo()
+```
