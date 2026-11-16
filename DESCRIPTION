@@ -1,21 +1,18 @@
 Package: funbootband
 Title: Simultaneous Prediction and Confidence Bands for Functional Data
-Version: 0.3.0
+Version: 0.3.1
 Authors@R: 
     person("Daniel", "Koska", 
            email = "dkoska@proton.me", 
            role = c("aut", "cre", "cph"), 
            comment = c(ORCID = "0000-0002-8245-5222"))
 Description: Computes simultaneous prediction and confidence bands for densely
-    sampled functional data on a common grid. The calibration builds on the
-    functional bootstrap approach of Lenhoff et al. (1999)
-    <doi:10.1016/S0966-6362(98)00043-5>; hierarchical measurement designs are
-    motivated by Koska et al. (2023)
-    <doi:10.1016/j.jbiomech.2023.111506>. Independent curves are resampled
-    individually. Clustered data use an intact-subject bootstrap with equal
-    subject weighting, and the clustered prediction target is one future
-    curve from a new subject. Curves are represented by finite Fourier series,
-    and an 'Rcpp' backend performs the bootstrap calibration.
+    sampled functional data on a common grid. Supports independent curves and
+    repeated curves from multiple subjects. For clustered data, an intact-subject
+    bootstrap gives each subject equal weight. Clustered prediction targets one
+    future curve from a new subject, whereas confidence bands target the
+    subject-weighted population mean. Curves are represented by finite Fourier
+    series, and an 'Rcpp' backend performs bootstrap calibration.
 License: GPL-3
 URL: https://github.com/koda86/funbootband-cran
 BugReports: https://github.com/koda86/funbootband-cran/issues
@@ -30,9 +27,9 @@ Config/testthat/edition: 3
 ByteCompile: true
 Config/roxygen2/version: 8.1.0
 NeedsCompilation: yes
-Packaged: 2026-09-18 12:48:16 UTC; daniel
+Packaged: 2026-11-10 09:55:45 UTC; daniel
 Author: Daniel Koska [aut, cre, cph] (ORCID:
     <https://orcid.org/0000-0002-8245-5222>)
 Maintainer: Daniel Koska <dkoska@proton.me>
 Repository: CRAN
-Date/Publication: 2026-09-18 14:30:08 UTC
+Date/Publication: 2026-11-16 08:00:11 UTC

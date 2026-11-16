@@ -128,7 +128,7 @@ lines(x, mu_true, col = "red", lwd = 2, lty = 2)
 # fourier_basis <- function(T, K) {
 #   t <- 0:(T - 1L)
 #   denom <- T - 1L
-#   if (K == 0L) return(cbind(1))
+#   if (K == 0L) return(matrix(1, nrow = T, ncol = 1L))
 #   cbind(
 #     1,
 #     sapply(1:K, function(k) cos(2*pi*k*t/denom)),
@@ -143,8 +143,9 @@ lines(x, mu_true, col = "red", lwd = 2, lty = 2)
 # 
 # mse <- function(A, B) mean((A - B)^2)
 # 
-# Ks <- c(10L, 20L, 30L, 40L, 50L, 60L, 70L, 80L, 90L, 99L)
 # T  <- nrow(Y)
+# maxK <- as.integer(floor((T - 2L) / 2L))
+# Ks <- unique(as.integer(round(seq(0, maxK, length.out = 9L))))
 # 
 # tab <- do.call(rbind, lapply(Ks, function(K){
 #   B <- fourier_basis(T, K)
